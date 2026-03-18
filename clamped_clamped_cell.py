@@ -15,6 +15,14 @@ class EmptyClass:
     pass
 
 
+def reference_left_anchor_x(mc, beam_length):
+    return mc.center_x - (beam_length / 2 + mc.anchor_width)
+
+
+def beam_center_x(mc, left_anchor_x, beam_length):
+    return left_anchor_x + mc.anchor_width + beam_length / 2
+
+
 def outline(mc):
     """Optional unit-cell outline for visualization."""
     cell_outline = Device("outline")
@@ -57,9 +65,14 @@ def make_center_electrode(mc, beam_ref, gap, is_top):
     )
     active_length = min(target_active_length, max_active_length)
 
-    active_x = beam_ref.center[0] - active_length / 2
-    stem_x = beam_ref.center[0] - mc.stem_width / 2
-    contact_x = beam_ref.center[0] - mc.contact_width / 2
+    active_center_x = beam_ref.center[0]
+    active_x = active_center_x - active_length / 2
+    contact_x = mc.fixed_contact_x
+    contact_center_x = contact_x + mc.contact_width / 2
+    stem_core_width = min(mc.stem_width_max, mc.contact_width, active_length)
+    stem_x = active_x
+    stem_right = max(contact_center_x + stem_core_width / 2, active_x + stem_core_width)
+    stem_width = stem_right - stem_x
 
     if is_top:
         active_y = beam_ref.ymax + gap
@@ -75,7 +88,7 @@ def make_center_electrode(mc, beam_ref, gap, is_top):
         layer=1,
     ).move((active_x, active_y))
     electrode << pg.rectangle(
-        size=(mc.stem_width, mc.stem_length),
+        size=(stem_width, mc.stem_length),
         layer=1,
     ).move((stem_x, stem_y))
     electrode << make_electrode_contact(mc).move((contact_x, contact_y))
@@ -91,8 +104,9 @@ def clamped_clamped_cell(mc, L, W, gap):
         cell << outline(mc)
 
     beam_y = mc.unit_height / 2 - W / 2
-    left_anchor_x = mc.center_x - (L / 2 + mc.anchor_width)
+    left_anchor_x = mc.fixed_left_anchor_x
     right_anchor_x = mc.center_x + L / 2
+    right_anchor_x = left_anchor_x + mc.anchor_width + L
     anchor_y = mc.unit_height / 2 - mc.anchor_height / 2
 
     left_anchor = cell << make_anchor(mc)
@@ -131,12 +145,18 @@ def build_parameter_object():
 
     mc.contact_width = 250
     mc.contact_height = 250
-    mc.stem_width = 20
+    mc.stem_width_max = 60
     mc.stem_length = 140
     mc.active_electrode_height = 80
     mc.electrode_coverage_fraction = 0.9
     mc.electrode_tip_overhang = 15
     mc.anchor_clearance = 25
+    mc.reference_beam_length = 100
+    mc.fixed_left_anchor_x = reference_left_anchor_x(mc, mc.reference_beam_length)
+    mc.fixed_contact_x = (
+        beam_center_x(mc, mc.fixed_left_anchor_x, mc.reference_beam_length)
+        - mc.contact_width / 2
+    )
 
     mc.label_size = 55
     mc.label_x = 120

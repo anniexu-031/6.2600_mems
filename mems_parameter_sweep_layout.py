@@ -29,7 +29,7 @@ def make_contact_block(size, layer=2):
 
 def cantilever_total_width(mc, beam_length):
     right_extension = mc.cant_electrode_tip_overhang + (
-        mc.cant_contact_width - mc.cant_stem_width
+        mc.cant_contact_width - mc.cant_stem_width_max
     ) / 2
     return mc.cant_anchor_width + beam_length + right_extension
 
@@ -37,6 +37,18 @@ def cantilever_total_width(mc, beam_length):
 def cantilever_reference_beam_xmax(mc, beam_length):
     anchor_x = (mc.cant_unit_width - cantilever_total_width(mc, beam_length)) / 2
     return anchor_x + mc.cant_anchor_width + beam_length
+
+
+def cantilever_reference_anchor_x(mc, beam_length):
+    return cantilever_reference_beam_xmax(mc, beam_length) - beam_length - mc.cant_anchor_width
+
+
+def cantilever_beam_center_x(mc, anchor_x, beam_length):
+    return anchor_x + mc.cant_anchor_width + beam_length / 2
+
+
+def cantilever_reference_finger_width(mc, beam_length):
+    return beam_length - mc.cant_electrode_start_offset + mc.cant_electrode_tip_overhang
 
 
 def make_cantilever_electrode(mc, beam_ref, gap, is_top):
@@ -48,17 +60,15 @@ def make_cantilever_electrode(mc, beam_ref, gap, is_top):
 
     finger_left = beam_xmin + mc.cant_electrode_start_offset
     finger_right = beam_xmax + mc.cant_electrode_tip_overhang
-    stem_x = finger_right - mc.cant_stem_width
-    contact_x = stem_x + mc.cant_stem_width / 2 - mc.cant_contact_width / 2
-    contact_x = min(
-        max(contact_x, mc.cant_edge_margin),
-        mc.cant_unit_width - mc.cant_edge_margin - mc.cant_contact_width,
-    )
+    finger_width = finger_right - finger_left
+    contact_x = mc.cant_fixed_contact_x
+    stem_width = mc.cant_fixed_stem_width
+    stem_x = finger_left
 
     if is_top:
         finger_y = beam_ymax + gap
+        contact_y = finger_y + mc.cant_electrode_height + mc.cant_stem_length
         stem_y = finger_y + mc.cant_electrode_height
-        contact_y = stem_y + mc.cant_stem_length
     else:
         finger_y = beam_ymin - gap - mc.cant_electrode_height
         contact_y = finger_y - mc.cant_stem_length - mc.cant_contact_height
@@ -68,10 +78,10 @@ def make_cantilever_electrode(mc, beam_ref, gap, is_top):
         (mc.cant_contact_width, mc.cant_contact_height), layer=2
     ).move((contact_x, contact_y))
     electrode << pg.rectangle(
-        size=(mc.cant_stem_width, mc.cant_stem_length), layer=1
+        size=(stem_width, mc.cant_stem_length), layer=1
     ).move((stem_x, stem_y))
     electrode << pg.rectangle(
-        size=(finger_right - finger_left, mc.cant_electrode_height), layer=1
+        size=(finger_width, mc.cant_electrode_height), layer=1
     ).move((finger_left, finger_y))
     return electrode
 
@@ -80,7 +90,7 @@ def cantilever_cell(mc, L, W, gap):
     cell = Device(f"cant_L{L}_W{W}_G{gap}")
     cell << outline(mc.cant_unit_width, mc.cant_unit_height)
 
-    anchor_x = mc.cant_fixed_beam_xmax - L - mc.cant_anchor_width
+    anchor_x = mc.cant_fixed_anchor_x
     anchor_y = mc.cant_unit_height / 2 - mc.cant_anchor_height / 2
     beam_y = mc.cant_unit_height / 2 - W / 2
 
@@ -110,6 +120,14 @@ def make_cc_anchor(mc):
     return anchor
 
 
+def cc_reference_left_anchor_x(mc, beam_length):
+    return mc.cc_center_x - (beam_length / 2 + mc.cc_anchor_width)
+
+
+def cc_beam_center_x(mc, left_anchor_x, beam_length):
+    return left_anchor_x + mc.cc_anchor_width + beam_length / 2
+
+
 def make_cc_electrode_contact(mc):
     contact = Device("cc_contact")
     contact << pg.rectangle(size=(mc.cc_contact_width, mc.cc_contact_height), layer=2)
@@ -128,9 +146,14 @@ def make_cc_electrode(mc, beam_ref, gap, is_top):
     )
     active_length = min(target_active_length, max_active_length)
 
-    active_x = beam_ref.center[0] - active_length / 2
-    stem_x = beam_ref.center[0] - mc.cc_stem_width / 2
-    contact_x = beam_ref.center[0] - mc.cc_contact_width / 2
+    active_center_x = beam_ref.center[0]
+    active_x = active_center_x - active_length / 2
+    contact_x = mc.cc_fixed_contact_x
+    contact_center_x = contact_x + mc.cc_contact_width / 2
+    stem_core_width = min(mc.cc_stem_width_max, mc.cc_contact_width, active_length)
+    stem_x = active_x
+    stem_right = max(contact_center_x + stem_core_width / 2, active_x + stem_core_width)
+    stem_width = stem_right - stem_x
 
     if is_top:
         active_y = beam_ref.ymax + gap
@@ -145,7 +168,7 @@ def make_cc_electrode(mc, beam_ref, gap, is_top):
         size=(active_length, mc.cc_electrode_height), layer=1
     ).move((active_x, active_y))
     electrode << pg.rectangle(
-        size=(mc.cc_stem_width, mc.cc_stem_length), layer=1
+        size=(stem_width, mc.cc_stem_length), layer=1
     ).move((stem_x, stem_y))
     electrode << make_cc_electrode_contact(mc).move((contact_x, contact_y))
     return electrode
@@ -157,8 +180,8 @@ def clamped_clamped_cell(mc, L, W, gap):
 
     beam_y = mc.cc_unit_height / 2 - W / 2
     anchor_y = mc.cc_unit_height / 2 - mc.cc_anchor_height / 2
-    left_anchor_x = mc.cc_center_x - (L / 2 + mc.cc_anchor_width)
-    right_anchor_x = mc.cc_center_x + L / 2
+    left_anchor_x = mc.cc_fixed_left_anchor_x
+    right_anchor_x = left_anchor_x + mc.cc_anchor_width + L
 
     cell << make_cc_anchor(mc).move((left_anchor_x, anchor_y))
     beam = cell << pg.rectangle(size=(L, W), layer=1)
@@ -248,7 +271,7 @@ def build_parameter_object():
     mc.cant_anchor_height = 250
     mc.cant_contact_width = 250
     mc.cant_contact_height = 250
-    mc.cant_stem_width = 20
+    mc.cant_stem_width_max = 60
     mc.cant_stem_length = 180
     mc.cant_electrode_height = 90
     mc.cant_electrode_start_offset = 30
@@ -256,6 +279,20 @@ def build_parameter_object():
     mc.cant_reference_beam_length = 500
     mc.cant_fixed_beam_xmax = cantilever_reference_beam_xmax(
         mc, mc.cant_reference_beam_length
+    )
+    mc.cant_fixed_anchor_x = cantilever_reference_anchor_x(
+        mc, mc.cant_reference_beam_length
+    )
+    mc.cant_pad_reference_beam_length = 100
+    mc.cant_fixed_contact_x = (
+        cantilever_beam_center_x(
+            mc, mc.cant_fixed_anchor_x, mc.cant_pad_reference_beam_length
+        )
+        - mc.cant_contact_width / 2
+    )
+    mc.cant_fixed_stem_width = min(
+        mc.cant_stem_width_max,
+        cantilever_reference_finger_width(mc, mc.cant_pad_reference_beam_length),
     )
 
     mc.cc_unit_width = 1500
@@ -265,12 +302,20 @@ def build_parameter_object():
     mc.cc_anchor_height = 250
     mc.cc_contact_width = 250
     mc.cc_contact_height = 250
-    mc.cc_stem_width = 20
+    mc.cc_stem_width_max = 60
     mc.cc_stem_length = 140
     mc.cc_electrode_height = 80
     mc.cc_electrode_coverage_fraction = 0.9
     mc.cc_electrode_tip_overhang = 15
     mc.cc_anchor_clearance = 25
+    mc.cc_reference_beam_length = 100
+    mc.cc_fixed_left_anchor_x = cc_reference_left_anchor_x(
+        mc, mc.cc_reference_beam_length
+    )
+    mc.cc_fixed_contact_x = (
+        cc_beam_center_x(mc, mc.cc_fixed_left_anchor_x, mc.cc_reference_beam_length)
+        - mc.cc_contact_width / 2
+    )
 
     mc.output_gds = "mems_parameter_sweep_layout.gds"
     return mc
