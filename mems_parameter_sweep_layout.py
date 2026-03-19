@@ -188,6 +188,20 @@ def clamped_clamped_cell(mc, L, W, gap):
     beam.move((left_anchor_x + mc.cc_anchor_width, beam_y))
     cell << make_cc_anchor(mc).move((right_anchor_x, anchor_y))
 
+    # ---- fillets at both anchor-beam junctions --------------------------------
+    fillets  = make_fillet_pieces(mc.cc_fillet_radius, layer=1)
+    left_jx  = left_anchor_x + mc.cc_anchor_width  # right face of left anchor
+    right_jx = right_anchor_x                       # left  face of right anchor
+
+    # Left junction: material is left+above/below  ->  air is top-right / bottom-right
+    cell << fillets['tr'].move((left_jx,  beam_y + W))
+    cell << fillets['br'].move((left_jx,  beam_y))
+
+    # Right junction: material is right+above/below  ->  air is top-left / bottom-left
+    cell << fillets['tl'].move((right_jx, beam_y + W))
+    cell << fillets['bl'].move((right_jx, beam_y))
+    # --------------------------------------------------------------------------
+
     cell << make_cc_electrode(mc, beam, gap=gap, is_top=True)
     cell << make_cc_electrode(mc, beam, gap=gap, is_top=False)
 
@@ -295,19 +309,21 @@ def build_parameter_object():
         cantilever_reference_finger_width(mc, mc.cant_pad_reference_beam_length),
     )
 
-    mc.cc_unit_width = 1500
-    mc.cc_unit_height = 1500
-    mc.cc_center_x = mc.cc_unit_width / 2
-    mc.cc_anchor_width = 250
-    mc.cc_anchor_height = 250
-    mc.cc_contact_width = 250
-    mc.cc_contact_height = 250
-    mc.cc_stem_width_max = 60
-    mc.cc_stem_length = 140
-    mc.cc_electrode_height = 80
-    mc.cc_electrode_coverage_fraction = 0.9
-    mc.cc_electrode_tip_overhang = 15
-    mc.cc_anchor_clearance = 25
+    # ---- clamped-clamped ----
+    mc.cc_unit_width                   = 1500
+    mc.cc_unit_height                  = 1500
+    mc.cc_center_x                     = mc.cc_unit_width / 2
+    mc.cc_anchor_width                 = 250
+    mc.cc_anchor_height                = 250
+    mc.cc_contact_width                = 250
+    mc.cc_contact_height               = 250
+    mc.cc_stem_width_max               = 60
+    mc.cc_stem_length                  = 140
+    mc.cc_electrode_height             = 10
+    mc.cc_electrode_coverage_fraction  = 0.9
+    mc.cc_electrode_tip_overhang       = 15
+    mc.cc_anchor_clearance             = 25
+
     mc.cc_reference_beam_length = 100
     mc.cc_fixed_left_anchor_x = cc_reference_left_anchor_x(
         mc, mc.cc_reference_beam_length
