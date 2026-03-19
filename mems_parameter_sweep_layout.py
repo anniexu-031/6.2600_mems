@@ -27,6 +27,62 @@ def make_contact_block(size, layer=2):
     return block
 
 
+# ---------------------------------------------------------------------------
+# Fillet helpers
+# ---------------------------------------------------------------------------
+
+def make_fillet_pieces(f_r, layer=1):
+    """
+    Returns four concave-corner fillet pieces keyed by the direction of the
+    AIR (open) space at the corner:
+
+        'tr'  top-right air    ->  material bottom-left   (F1 from reference snippet)
+        'tl'  top-left air     ->  material bottom-right
+        'bl'  bottom-left air  ->  material top-right
+        'br'  bottom-right air ->  material top-left      (F4 from reference snippet)
+
+    Usage:
+        fillets = make_fillet_pieces(f_r, layer=1)
+        cell << fillets['tr'].move((corner_x, corner_y))
+
+    The corner point is the exact concave vertex of the material geometry.
+    """
+    D1 = pg.circle(radius=f_r, layer=layer).move([f_r, f_r])
+
+    # tr: rect [0,0]-[fr,fr], circle top-right -> solid piece bottom-left
+    D2 = pg.rectangle(size=[f_r, f_r], layer=layer)
+    F_tr = pg.boolean(A=D2, B=D1, operation='not',
+                      precision=1e-6, num_divisions=[1, 1], layer=layer)
+    # corner at (0,0); piece extends into +x,+y  ✓
+
+    # tl: rect [fr,0]-[2fr,fr], circle top-left -> solid piece bottom-right, shifted to [-fr,0]-[0,fr]
+    D2 = pg.rectangle(size=[f_r, f_r], layer=layer).move([f_r, 0])
+    F_tl = pg.boolean(A=D2, B=D1, operation='not',
+                      precision=1e-6, num_divisions=[1, 1], layer=layer)
+    F_tl.move([-2 * f_r, 0])
+    # corner at (0,0); piece extends into -x,+y  ✓
+
+    # bl: rect [fr,fr]-[2fr,2fr], circle bottom-left -> solid piece top-right, shifted to [-fr,-fr]-[0,0]
+    D2 = pg.rectangle(size=[f_r, f_r], layer=layer).move([f_r, f_r])
+    F_bl = pg.boolean(A=D2, B=D1, operation='not',
+                      precision=1e-6, num_divisions=[1, 1], layer=layer)
+    F_bl.move([-2 * f_r, -2 * f_r])
+    # corner at (0,0); piece extends into -x,-y  ✓
+
+    # br: rect [0,fr]-[fr,2fr], circle top-left -> solid piece bottom-right, shifted to [0,-fr]-[fr,0]
+    D2 = pg.rectangle(size=[f_r, f_r], layer=layer).move([0, f_r])
+    F_br = pg.boolean(A=D2, B=D1, operation='not',
+                      precision=1e-6, num_divisions=[1, 1], layer=layer)
+    F_br.move([0, -2 * f_r])
+    # corner at (0,0); piece extends into +x,-y  ✓
+
+    return {'tr': F_tr, 'tl': F_tl, 'bl': F_bl, 'br': F_br}
+
+
+# ---------------------------------------------------------------------------
+# Cantilever geometry
+# ---------------------------------------------------------------------------
+
 def cantilever_total_width(mc, beam_length):
     right_extension = mc.cant_electrode_tip_overhang + (
         mc.cant_contact_width - mc.cant_stem_width_max
@@ -58,21 +114,21 @@ def make_cantilever_electrode(mc, beam_ref, gap, is_top):
     beam_ymin = beam_ref.ymin
     beam_ymax = beam_ref.ymax
 
-    finger_left = beam_xmin + mc.cant_electrode_start_offset
+    finger_left  = beam_xmin + mc.cant_electrode_start_offset
     finger_right = beam_xmax + mc.cant_electrode_tip_overhang
     finger_width = finger_right - finger_left
-    contact_x = mc.cant_fixed_contact_x
-    stem_width = mc.cant_fixed_stem_width
-    stem_x = finger_left
+    contact_x    = mc.cant_fixed_contact_x
+    stem_width   = mc.cant_fixed_stem_width
+    stem_x       = finger_left
 
     if is_top:
-        finger_y = beam_ymax + gap
+        finger_y  = beam_ymax + gap
         contact_y = finger_y + mc.cant_electrode_height + mc.cant_stem_length
-        stem_y = finger_y + mc.cant_electrode_height
+        stem_y    = finger_y + mc.cant_electrode_height
     else:
-        finger_y = beam_ymin - gap - mc.cant_electrode_height
+        finger_y  = beam_ymin - gap - mc.cant_electrode_height
         contact_y = finger_y - mc.cant_stem_length - mc.cant_contact_height
-        stem_y = contact_y + mc.cant_contact_height
+        stem_y    = contact_y + mc.cant_contact_height
 
     electrode << make_contact_block(
         (mc.cant_contact_width, mc.cant_contact_height), layer=2
@@ -92,7 +148,7 @@ def cantilever_cell(mc, L, W, gap):
 
     anchor_x = mc.cant_fixed_anchor_x
     anchor_y = mc.cant_unit_height / 2 - mc.cant_anchor_height / 2
-    beam_y = mc.cant_unit_height / 2 - W / 2
+    beam_y   = mc.cant_unit_height / 2 - W / 2
 
     cell << pg.rectangle(
         size=(mc.cant_anchor_width, mc.cant_anchor_height), layer=1
@@ -100,6 +156,18 @@ def cantilever_cell(mc, L, W, gap):
 
     beam = cell << pg.rectangle(size=(L, W), layer=1)
     beam.move((anchor_x + mc.cant_anchor_width, beam_y))
+
+    # ---- fillets at the anchor-beam junction --------------------------------
+    # junction_x = right face of anchor = left face of beam
+    junction_x = anchor_x + mc.cant_anchor_width
+    fillets = make_fillet_pieces(mc.cant_fillet_radius, layer=1)
+
+    # Top inner corner: material is left + below  ->  air is top-right  ->  'tr'
+    cell << fillets['tr'].move((junction_x, beam_y + W))
+
+    # Bottom inner corner: material is left + above  ->  air is bottom-right  ->  'br'
+    cell << fillets['br'].move((junction_x, beam_y))
+    # -------------------------------------------------------------------------
 
     cell << make_cantilever_electrode(mc, beam, gap=gap, is_top=True)
     cell << make_cantilever_electrode(mc, beam, gap=gap, is_top=False)
@@ -113,6 +181,10 @@ def cantilever_cell(mc, L, W, gap):
     label.move((mc.cell_label_x, mc.cell_label_y))
     return cell
 
+
+# ---------------------------------------------------------------------------
+# Clamped-clamped geometry
+# ---------------------------------------------------------------------------
 
 def make_cc_anchor(mc):
     anchor = Device("cc_anchor")
@@ -146,23 +218,23 @@ def make_cc_electrode(mc, beam_ref, gap, is_top):
     )
     active_length = min(target_active_length, max_active_length)
 
-    active_center_x = beam_ref.center[0]
-    active_x = active_center_x - active_length / 2
-    contact_x = mc.cc_fixed_contact_x
+    active_center_x  = beam_ref.center[0]
+    active_x         = active_center_x - active_length / 2
+    contact_x        = mc.cc_fixed_contact_x
     contact_center_x = contact_x + mc.cc_contact_width / 2
-    stem_core_width = min(mc.cc_stem_width_max, mc.cc_contact_width, active_length)
-    stem_x = active_x
-    stem_right = max(contact_center_x + stem_core_width / 2, active_x + stem_core_width)
-    stem_width = stem_right - stem_x
+    stem_core_width  = min(mc.cc_stem_width_max, mc.cc_contact_width, active_length)
+    stem_x           = active_x
+    stem_right       = max(contact_center_x + stem_core_width / 2, active_x + stem_core_width)
+    stem_width       = stem_right - stem_x
 
     if is_top:
-        active_y = beam_ref.ymax + gap
-        stem_y = active_y + mc.cc_electrode_height
+        active_y  = beam_ref.ymax + gap
+        stem_y    = active_y + mc.cc_electrode_height
         contact_y = stem_y + mc.cc_stem_length
     else:
-        active_y = beam_ref.ymin - gap - mc.cc_electrode_height
+        active_y  = beam_ref.ymin - gap - mc.cc_electrode_height
         contact_y = active_y - mc.cc_stem_length - mc.cc_contact_height
-        stem_y = contact_y + mc.cc_contact_height
+        stem_y    = contact_y + mc.cc_contact_height
 
     electrode << pg.rectangle(
         size=(active_length, mc.cc_electrode_height), layer=1
@@ -178,9 +250,9 @@ def clamped_clamped_cell(mc, L, W, gap):
     cell = Device(f"cc_L{L}_W{W}_G{gap}")
     cell << outline(mc.cc_unit_width, mc.cc_unit_height)
 
-    beam_y = mc.cc_unit_height / 2 - W / 2
-    anchor_y = mc.cc_unit_height / 2 - mc.cc_anchor_height / 2
-    left_anchor_x = mc.cc_fixed_left_anchor_x
+    beam_y         = mc.cc_unit_height / 2 - W / 2
+    anchor_y       = mc.cc_unit_height / 2 - mc.cc_anchor_height / 2
+    left_anchor_x  = mc.cc_fixed_left_anchor_x
     right_anchor_x = left_anchor_x + mc.cc_anchor_width + L
 
     cell << make_cc_anchor(mc).move((left_anchor_x, anchor_y))
@@ -201,6 +273,10 @@ def clamped_clamped_cell(mc, L, W, gap):
     return cell
 
 
+# ---------------------------------------------------------------------------
+# Layout assembly
+# ---------------------------------------------------------------------------
+
 def add_section_label(parent, text, position, size):
     label = parent << pg.text(text=text, size=size, layer=3, font="Arial")
     label.move(position)
@@ -208,7 +284,7 @@ def add_section_label(parent, text, position, size):
 
 
 def place_parameter_grid(parent, origin, lengths, widths, gaps, cell_fn, section_name, mc):
-    section = Device(section_name)
+    section   = Device(section_name)
     row_pairs = [(W, G) for W in widths for G in gaps]
 
     for col, L in enumerate(lengths):
@@ -232,50 +308,57 @@ def place_parameter_grid(parent, origin, lengths, widths, gaps, cell_fn, section
         row_label.move((mc.row_label_x, row_y + mc.row_label_y_offset))
 
         for col, L in enumerate(lengths):
-            cell = cell_fn(mc, L, W, G)
+            cell     = cell_fn(mc, L, W, G)
             cell_ref = section << cell
             cell_ref.move((mc.grid_origin_x + col * mc.cell_pitch_x, row_y))
 
     parent << section.move(origin)
 
 
+# ---------------------------------------------------------------------------
+# Parameter object
+# ---------------------------------------------------------------------------
+
 def build_parameter_object():
     mc = EmptyClass()
 
     mc.lengths = [100, 200, 300, 400, 500]
-    mc.widths = [10, 15, 20]
-    mc.gaps = [2, 3, 5]
+    mc.widths  = [10, 15, 20]
+    mc.gaps    = [2, 3, 5]
 
-    mc.cell_label_size = 42
-    mc.cell_label_x = 80
-    mc.cell_label_y = 80
-    mc.header_text_size = 70
+    mc.cell_label_size    = 42
+    mc.cell_label_x       = 80
+    mc.cell_label_y       = 80
+    mc.header_text_size   = 70
     mc.section_label_size = 110
 
-    mc.cell_pitch_x = 1800
-    mc.cell_pitch_y = 1700
-    mc.grid_origin_x = 220
-    mc.grid_origin_y = 220
-    mc.column_label_x = 520
-    mc.column_label_y = 40
-    mc.row_label_x = 20
+    mc.cell_pitch_x       = 1800
+    mc.cell_pitch_y       = 1700
+    mc.grid_origin_x      = 220
+    mc.grid_origin_y      = 220
+    mc.column_label_x     = 520
+    mc.column_label_y     = 40
+    mc.row_label_x        = 20
     mc.row_label_y_offset = 620
 
-    mc.family_gap_x = 1200
+    mc.family_gap_x  = 1200
     mc.master_margin = 200
 
-    mc.cant_unit_width = 1500
-    mc.cant_unit_height = 1500
-    mc.cant_edge_margin = 150
-    mc.cant_anchor_width = 250
-    mc.cant_anchor_height = 250
-    mc.cant_contact_width = 250
-    mc.cant_contact_height = 250
-    mc.cant_stem_width_max = 60
-    mc.cant_stem_length = 180
-    mc.cant_electrode_height = 90
+    # ---- cantilever ----
+    mc.cant_unit_width             = 1500
+    mc.cant_unit_height            = 1500
+    mc.cant_edge_margin            = 150
+    mc.cant_anchor_width           = 250
+    mc.cant_anchor_height          = 250
+    mc.cant_contact_width          = 250
+    mc.cant_contact_height         = 250
+    mc.cant_stem_width_max         = 60
+    mc.cant_stem_length            = 180
+    mc.cant_electrode_height       = 10
     mc.cant_electrode_start_offset = 30
     mc.cant_electrode_tip_overhang = 15
+    mc.cant_fillet_radius          = 3   # anchor-beam junction fillet radius (µm)
+
     mc.cant_reference_beam_length = 500
     mc.cant_fixed_beam_xmax = cantilever_reference_beam_xmax(
         mc, mc.cant_reference_beam_length
@@ -295,19 +378,21 @@ def build_parameter_object():
         cantilever_reference_finger_width(mc, mc.cant_pad_reference_beam_length),
     )
 
-    mc.cc_unit_width = 1500
-    mc.cc_unit_height = 1500
-    mc.cc_center_x = mc.cc_unit_width / 2
-    mc.cc_anchor_width = 250
-    mc.cc_anchor_height = 250
-    mc.cc_contact_width = 250
-    mc.cc_contact_height = 250
-    mc.cc_stem_width_max = 60
-    mc.cc_stem_length = 140
-    mc.cc_electrode_height = 80
-    mc.cc_electrode_coverage_fraction = 0.9
-    mc.cc_electrode_tip_overhang = 15
-    mc.cc_anchor_clearance = 25
+    # ---- clamped-clamped ----
+    mc.cc_unit_width                   = 1500
+    mc.cc_unit_height                  = 1500
+    mc.cc_center_x                     = mc.cc_unit_width / 2
+    mc.cc_anchor_width                 = 250
+    mc.cc_anchor_height                = 250
+    mc.cc_contact_width                = 250
+    mc.cc_contact_height               = 250
+    mc.cc_stem_width_max               = 60
+    mc.cc_stem_length                  = 140
+    mc.cc_electrode_height             = 10
+    mc.cc_electrode_coverage_fraction  = 0.9
+    mc.cc_electrode_tip_overhang       = 15
+    mc.cc_anchor_clearance             = 25
+
     mc.cc_reference_beam_length = 100
     mc.cc_fixed_left_anchor_x = cc_reference_left_anchor_x(
         mc, mc.cc_reference_beam_length
@@ -321,52 +406,39 @@ def build_parameter_object():
     return mc
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main():
-    mc = build_parameter_object()
+    mc     = build_parameter_object()
     master = Device("mems_parameter_sweep_layout")
 
-    row_count = len(mc.widths) * len(mc.gaps)
+    row_count     = len(mc.widths) * len(mc.gaps)
     section_width = mc.grid_origin_x + len(mc.lengths) * mc.cell_pitch_x
-    section_height = mc.grid_origin_y + row_count * mc.cell_pitch_y
 
     cant_origin = (mc.master_margin, mc.master_margin + 200)
-    cc_origin = (
+    cc_origin   = (
         cant_origin[0] + section_width + mc.family_gap_x,
         cant_origin[1],
     )
 
     add_section_label(
-        master,
-        "Cantilever Sweep",
-        (cant_origin[0], mc.master_margin),
-        mc.section_label_size,
+        master, "Cantilever Sweep",
+        (cant_origin[0], mc.master_margin), mc.section_label_size,
     )
     add_section_label(
-        master,
-        "Clamped-Clamped Sweep",
-        (cc_origin[0], mc.master_margin),
-        mc.section_label_size,
+        master, "Clamped-Clamped Sweep",
+        (cc_origin[0], mc.master_margin), mc.section_label_size,
     )
 
     place_parameter_grid(
-        master,
-        cant_origin,
-        mc.lengths,
-        mc.widths,
-        mc.gaps,
-        cantilever_cell,
-        "cantilever_section",
-        mc,
+        master, cant_origin, mc.lengths, mc.widths, mc.gaps,
+        cantilever_cell, "cantilever_section", mc,
     )
     place_parameter_grid(
-        master,
-        cc_origin,
-        mc.lengths,
-        mc.widths,
-        mc.gaps,
-        clamped_clamped_cell,
-        "clamped_clamped_section",
-        mc,
+        master, cc_origin, mc.lengths, mc.widths, mc.gaps,
+        clamped_clamped_cell, "clamped_clamped_section", mc,
     )
 
     master.write_gds(mc.output_gds)
